@@ -193,12 +193,12 @@ def parse_pubdate(s):
     return dt.astimezone(KST)
 
 
-GROQ_MODEL = "llama-3.1-8b-instant"   # Groq 무료 티어(하루 14,400회, 분당 토큰 여유 큼)
-# 품질을 더 원하면 아래로 바꾸세요(단 70B는 분당 토큰 한도가 낮아 긴 한국어 기사에서 429가 잦을 수 있음):
-#   GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_MODEL = "llama-3.3-70b-versatile"   # 문체 지시(개조식/명사형)를 잘 따르는 대형 모델
+# 속도·한도가 더 필요하면 아래로(단 문체 준수는 약해짐):
+#   GROQ_MODEL = "llama-3.1-8b-instant"
 
 # 분당 한도(429) 방지를 위해 호출 사이 최소 간격을 둠
-LLM_MIN_INTERVAL = 8.0   # 초 (Groq 무료 분당 한도에 여유 있게)
+LLM_MIN_INTERVAL = 15.0   # 초 (70B는 분당 토큰 한도가 낮아 넉넉히. 8B로 되돌리면 8.0 권장)
 _last_llm = [0.0]
 
 # 429가 계속 나면(=계정이 실제로 스로틀됨) 이번 실행은 요약을 포기하고
