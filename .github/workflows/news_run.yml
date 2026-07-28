@@ -1,0 +1,45 @@
+name: news-run
+on:
+  schedule:
+    # ┌ 시각은 UTC 기준 (KST = UTC + 9). 주말(KST 토·일)에는 아예 트리거되지 않도록
+    # │ 요일까지 지정해서 분(minutes) 소모를 0으로 만듭니다.
+    # │
+    # │  KST 06:00 = UTC 21:00 (전날)  → 전날 요일이 일~목(0-4)이면 KST 월~금 06:00
+    - cron: "0 21 * * 0-4"
+    # │  KST 16:00 = UTC 07:00 (당일)  → 당일 요일이 월~금(1-5)이면 KST 월~금 16:00
+    - cron: "0 7 * * 1-5"
+    # └ (KST 월요일 06:00 = UTC 일요일 21:00 → 0에 포함되므로 월요일 첫 실행도 정상 동작)
+  workflow_dispatch: {}   # 깃허브 화면의 'Run workflow' 버튼 — 언제든 수동 테스트 가능
+permissions:
+  contents: write          # 중복기록 파일(seen.json)을 커밋/푸시하기 위해 필요
+concurrency:
+  group: news-run
+  cancel-in-progress: false
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30    # 혹시 늘어질 경우 30분에서 자동 중단 (안전장치)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install packages
+        run: pip install -r requirements.txt
+      - name: run bot
+        env:
+          PYTHONUNBUFFERED: "1"          # 로그가 실시간으로 보이도록
+          GITHUB_EVENT_NAME: ${{ github.event_name }}   # 예약/수동 구분용 (주말 스킵 판단)
+          NAVER_CLIENT_ID:     ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+          TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY:      ${{ secrets.GEMINI_API_KEY }}
+        run: python news_bot.py
+      - name: save seen.json
+        run: |
+          git config user.name  "news-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add seen.json || true
+          git commit -m "update seen [skip ci]" || echo "변경사항 없음 - 건너뜀"
+          git push || echo "푸시할 내용 없음 - 건너뜀"
