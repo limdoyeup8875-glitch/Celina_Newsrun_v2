@@ -106,7 +106,7 @@ MAX_PER_COMPANY = 8
 # 요약 방식
 #   True  : 구글 Gemini(무료 티어)로 2~3불릿 요약 -> 품질 좋음
 #   False : 네이버가 주는 기사 요약문(스니펫)을 그대로 정리 -> 추가설정 없음
-USE_LLM = False
+USE_LLM = True
 
 # 기사 본문까지 직접 읽어서 요약 (요약 품질↑, 약간 느려짐). 실패하면 자동으로 미리보기로 대체
 FETCH_FULL_TEXT = True
@@ -196,8 +196,14 @@ def parse_pubdate(s):
 GEMINI_MODEL = "gemini-2.5-flash-lite"   # 무료 티어, 분당 한도 여유 큼
 
 # 분당 한도(429) 방지를 위해 호출 사이 최소 간격을 둠
-LLM_MIN_INTERVAL = 4.3   # 초 (무료 티어 15 RPM 이하로 유지 → 429 백오프 회피)
+LLM_MIN_INTERVAL = 5.0   # 초 (무료 티어 15 RPM=4초 이하보다 여유 → 분당 12회)
 _last_llm = [0.0]
+
+# 429가 계속 나면(=계정이 실제로 스로틀됨) 이번 실행은 요약을 포기하고
+# 남은 기사를 전부 스니펫으로 처리 → 실행이 무한정 늘어지는 것 방지.
+_llm_consecutive_429 = [0]     # 연속 429 횟수
+_llm_disabled = [False]        # True 가 되면 이후 LLM 호출 안 함
+LLM_429_GIVEUP = 8             # 연속 429 이 만큼 쌓이면 요약 중단
 
 def _pace_llm():
     wait = LLM_MIN_INTERVAL - (time.monotonic() - _last_llm[0])
@@ -210,7 +216,7 @@ def summarize_with_llm(title, body):
     """구글 Gemini 로 2~3불릿 요약 (추가 패키지 없이 REST 호출)"""
     url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{GEMINI_MODEL}:generateContent?key={GEMINI_KEY}"
+        f"{GEMINI_MODEL}:generateContent"
     )
     prompt = (
         "다음 뉴스 기사를 한국어로 핵심만 요약해줘.\n"
@@ -224,22 +230,39 @@ def summarize_with_llm(title, body):
         f"[제목]\n{title}\n\n[본문]\n{body[:3500]}"
     )
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
+
+    # 이미 이번 실행에서 429가 과도해 요약을 접었으면 즉시 스니펫으로
+    if _llm_disabled[0]:
+        raise RuntimeError("LLM 비활성화(429 과다) — 스니펫 사용")
+
     r = None
     for attempt in range(3):
         _pace_llm()
         r = requests.post(
             url,
-            headers={"Content-Type": "application/json"},
+            headers={"x-goog-api-key": GEMINI_KEY, "Content-Type": "application/json"},
             json=payload,
             timeout=20,
         )
-        if r.status_code == 429:                 # 분당 한도 초과 -> 점점 더 길게 쉬고 재시도
-            time.sleep(8 * (attempt + 1))        # 8s, 16s, 24s
+        if r.status_code == 429:
+            # 분당(RPM) 한도. 같은 분 안에서 재시도하면 또 걸리므로 다음 분까지 대기.
+            _llm_consecutive_429[0] += 1
+            if _llm_consecutive_429[0] >= LLM_429_GIVEUP:
+                _llm_disabled[0] = True
+                print("  429가 계속 발생 → 이번 실행은 남은 기사 모두 스니펫으로 처리")
+                r.raise_for_status()
+            print(f"  429(분당 한도) → 65초 대기 후 재시도 ({attempt + 1}/3)")
+            time.sleep(65)
+            continue
+        if r.status_code == 503:
+            # 구글 서버 일시 과부하 → 짧게 쉬고 재시도
+            time.sleep(10 * (attempt + 1))       # 10s, 20s, 30s
             continue
         r.raise_for_status()
         data = r.json()
+        _llm_consecutive_429[0] = 0              # 성공하면 연속 429 카운터 리셋
         return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-    r.raise_for_status()   # 3번 다 429면 예외 발생 -> 스니펫으로 대체
+    r.raise_for_status()   # 재시도 모두 실패 -> 예외 발생 -> 스니펫으로 대체
 
 
 def _clean_title(t):
