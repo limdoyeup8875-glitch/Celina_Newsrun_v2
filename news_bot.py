@@ -106,7 +106,7 @@ MAX_PER_COMPANY = 8
 # 요약 방식
 #   True  : 구글 Gemini(무료 티어)로 2~3불릿 요약 -> 품질 좋음
 #   False : 네이버가 주는 기사 요약문(스니펫)을 그대로 정리 -> 추가설정 없음
-USE_LLM = True
+USE_LLM = False
 
 # 기사 본문까지 직접 읽어서 요약 (요약 품질↑, 약간 느려짐). 실패하면 자동으로 미리보기로 대체
 FETCH_FULL_TEXT = True
