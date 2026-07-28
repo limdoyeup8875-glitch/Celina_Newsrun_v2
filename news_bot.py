@@ -215,17 +215,20 @@ def _pace_llm():
 
 
 def summarize_with_llm(title, body):
-    """Groq(OpenAI 호환 API)로 2~3불릿 요약 (추가 패키지 없이 REST 호출)"""
+    """Groq(OpenAI 호환 API)로 2불릿 개조식 요약 (추가 패키지 없이 REST 호출)"""
     url = "https://api.groq.com/openai/v1/chat/completions"
     prompt = (
         "다음 뉴스 기사를 한국어로 핵심만 요약해줘.\n"
-        "반드시 지켜:\n"
-        "- 불릿 2~3개로 (정보가 적으면 최소 2개)\n"
-        "- 각 불릿은 줄을 바꿔서 '- ' 로 시작\n"
-        "- 문장이 아니라 '개조식 요약체'로: 명사형 종결어미로 끝낼 것 "
-        "(예: '...기록', '...전망', '...확대', '...추진', '...예정', '...밝힘'). "
-        "'~했다/~이다/~한다' 같은 완결 서술형은 쓰지 말 것\n"
-        "- 서론·맺음말 없이 사실만, 숫자는 살려서, 각 불릿은 짧게\n\n"
+        "반드시 아래 규칙을 지켜:\n"
+        "1) 불릿 정확히 2개만. 각 불릿은 새 줄에서 '- ' 로 시작.\n"
+        "2) 【매우 중요】 각 불릿은 반드시 '명사형(개조식)'으로 끝낼 것. "
+        "즉 마지막을 명사 또는 명사형으로 맺어라 "
+        "(예: '...확대', '...전망', '...추진', '...예정', '...기록', '...밝힘', '...계획').\n"
+        "3) '~했다 / ~한다 / ~이다 / ~된다 / ~있다 / ~였다' 같은 서술형 문장으로 끝내면 절대 안 됨. "
+        "서술형이 떠오르면 명사형으로 바꿔라 "
+        "(예: '실적이 개선됐다' → '실적 개선', '투자를 확대한다' → '투자 확대', "
+        "'흑자 전환했다' → '흑자 전환').\n"
+        "4) 서론·맺음말 없이 사실만, 숫자는 살려서, 각 불릿은 한 줄로 짧게.\n\n"
         f"[제목]\n{title}\n\n[본문]\n{body[:2500]}"
     )
     payload = {
@@ -397,7 +400,7 @@ def clean_summary(text):
         s = _no_ellipsis(s)
         if s:
             out.append(f"- {s}")
-    return "\n".join(out[:3]) if out else "- (요약 없음)"
+    return "\n".join(out[:2]) if out else "- (요약 없음)"
 
 
 def summarize_snippet(snippet):
@@ -405,7 +408,7 @@ def summarize_snippet(snippet):
     clean = _no_ellipsis(strip_tags(snippet))
     # 문장 단위로 잘라 최대 3개 불릿
     parts = re.split(r"(?<=[.!?。])\s+", clean)
-    parts = [_no_ellipsis(p) for p in parts if len(p.strip()) > 5][:3]
+    parts = [_no_ellipsis(p) for p in parts if len(p.strip()) > 5][:2]
     if not parts:
         parts = [clean] if clean else ["(요약 없음)"]
     return "\n".join(f"- {p}" for p in parts)
