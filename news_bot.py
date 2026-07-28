@@ -210,7 +210,7 @@ def summarize_with_llm(title, body):
     """구글 Gemini 로 2~3불릿 요약 (추가 패키지 없이 REST 호출)"""
     url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{GEMINI_MODEL}:generateContent"
+        f"{GEMINI_MODEL}:generateContent?key={GEMINI_KEY}"
     )
     prompt = (
         "다음 뉴스 기사를 한국어로 핵심만 요약해줘.\n"
@@ -229,7 +229,7 @@ def summarize_with_llm(title, body):
         _pace_llm()
         r = requests.post(
             url,
-            headers={"x-goog-api-key": GEMINI_KEY, "Content-Type": "application/json"},
+            headers={"Content-Type": "application/json"},
             json=payload,
             timeout=20,
         )
