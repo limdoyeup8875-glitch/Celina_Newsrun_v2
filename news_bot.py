@@ -2,7 +2,7 @@
 """
 커버리지 뉴스런 -> 텔레그램 자동 발송 봇
 - 네이버 뉴스 검색 API 사용
-- 요약: 구글 Gemini 무료 티어 사용
+- 요약: Groq(무료 티어, OpenAI 호환 API) 사용
 - 섹터별로 묶어서 (제목 / 링크 / 2~3불릿 요약) 전송
 - KST 기준 평일에만 동작, 월요일은 72시간 / 그 외 평일은 24시간 조회
 - 이미 보낸 기사는 seen.json 으로 중복 제거
@@ -104,7 +104,7 @@ SECTORS = {
 MAX_PER_COMPANY = 8
 
 # 요약 방식
-#   True  : 구글 Gemini(무료 티어)로 2~3불릿 요약 -> 품질 좋음
+#   True  : Groq(무료 티어)로 2~3불릿 요약 -> 품질 좋음
 #   False : 네이버가 주는 기사 요약문(스니펫)을 그대로 정리 -> 추가설정 없음
 USE_LLM = True
 
@@ -123,7 +123,7 @@ NAVER_ID     = os.environ.get("NAVER_CLIENT_ID", "")
 NAVER_SECRET = os.environ.get("NAVER_CLIENT_SECRET", "")
 TG_TOKEN     = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TG_CHAT      = os.environ.get("TELEGRAM_CHAT_ID", "")
-GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
+GROQ_KEY = os.environ.get("GROQ_API_KEY", "")
 
 # 예약 실행 여부 (워크플로에서 GITHUB_EVENT_NAME 을 넘겨줌).
 #   "schedule" = cron 자동 실행 / "workflow_dispatch" = 수동 실행
@@ -193,10 +193,12 @@ def parse_pubdate(s):
     return dt.astimezone(KST)
 
 
-GEMINI_MODEL = "gemini-2.5-flash-lite"   # 무료 티어, 분당 한도 여유 큼
+GROQ_MODEL = "llama-3.1-8b-instant"   # Groq 무료 티어(하루 14,400회, 분당 토큰 여유 큼)
+# 품질을 더 원하면 아래로 바꾸세요(단 70B는 분당 토큰 한도가 낮아 긴 한국어 기사에서 429가 잦을 수 있음):
+#   GROQ_MODEL = "llama-3.3-70b-versatile"
 
 # 분당 한도(429) 방지를 위해 호출 사이 최소 간격을 둠
-LLM_MIN_INTERVAL = 5.0   # 초 (무료 티어 15 RPM=4초 이하보다 여유 → 분당 12회)
+LLM_MIN_INTERVAL = 8.0   # 초 (Groq 무료 분당 한도에 여유 있게)
 _last_llm = [0.0]
 
 # 429가 계속 나면(=계정이 실제로 스로틀됨) 이번 실행은 요약을 포기하고
@@ -213,11 +215,8 @@ def _pace_llm():
 
 
 def summarize_with_llm(title, body):
-    """구글 Gemini 로 2~3불릿 요약 (추가 패키지 없이 REST 호출)"""
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{GEMINI_MODEL}:generateContent"
-    )
+    """Groq(OpenAI 호환 API)로 2~3불릿 요약 (추가 패키지 없이 REST 호출)"""
+    url = "https://api.groq.com/openai/v1/chat/completions"
     prompt = (
         "다음 뉴스 기사를 한국어로 핵심만 요약해줘.\n"
         "반드시 지켜:\n"
@@ -227,9 +226,14 @@ def summarize_with_llm(title, body):
         "(예: '...기록', '...전망', '...확대', '...추진', '...예정', '...밝힘'). "
         "'~했다/~이다/~한다' 같은 완결 서술형은 쓰지 말 것\n"
         "- 서론·맺음말 없이 사실만, 숫자는 살려서, 각 불릿은 짧게\n\n"
-        f"[제목]\n{title}\n\n[본문]\n{body[:3500]}"
+        f"[제목]\n{title}\n\n[본문]\n{body[:2500]}"
     )
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.3,
+        "max_tokens": 400,
+    }
 
     # 이미 이번 실행에서 429가 과도해 요약을 접었으면 즉시 스니펫으로
     if _llm_disabled[0]:
@@ -240,28 +244,34 @@ def summarize_with_llm(title, body):
         _pace_llm()
         r = requests.post(
             url,
-            headers={"x-goog-api-key": GEMINI_KEY, "Content-Type": "application/json"},
+            headers={"Authorization": f"Bearer {GROQ_KEY}",
+                     "Content-Type": "application/json"},
             json=payload,
-            timeout=20,
+            timeout=30,
         )
         if r.status_code == 429:
-            # 분당(RPM) 한도. 같은 분 안에서 재시도하면 또 걸리므로 다음 분까지 대기.
+            # 분당 요청/토큰 한도. Groq은 분 단위로 리셋되므로 잠깐 기다렸다 재시도.
             _llm_consecutive_429[0] += 1
             if _llm_consecutive_429[0] >= LLM_429_GIVEUP:
                 _llm_disabled[0] = True
                 print("  429가 계속 발생 → 이번 실행은 남은 기사 모두 스니펫으로 처리")
                 r.raise_for_status()
-            print(f"  429(분당 한도) → 65초 대기 후 재시도 ({attempt + 1}/3)")
-            time.sleep(65)
+            try:                                    # Groq이 알려주는 대기시간(retry-after) 우선
+                wait = int(float(r.headers.get("retry-after", "30")))
+            except Exception:
+                wait = 30
+            wait = min(max(wait, 5), 60)            # 5~60초 범위로 clamp
+            print(f"  429(한도) → {wait}초 대기 후 재시도 ({attempt + 1}/3)")
+            time.sleep(wait)
             continue
         if r.status_code == 503:
-            # 구글 서버 일시 과부하 → 짧게 쉬고 재시도
+            # 서버 일시 과부하 → 짧게 쉬고 재시도
             time.sleep(10 * (attempt + 1))       # 10s, 20s, 30s
             continue
         r.raise_for_status()
         data = r.json()
         _llm_consecutive_429[0] = 0              # 성공하면 연속 429 카운터 리셋
-        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        return data["choices"][0]["message"]["content"].strip()
     r.raise_for_status()   # 재시도 모두 실패 -> 예외 발생 -> 스니펫으로 대체
 
 
@@ -508,8 +518,8 @@ def main():
         ("NAVER_CLIENT_ID", NAVER_ID), ("NAVER_CLIENT_SECRET", NAVER_SECRET),
         ("TELEGRAM_BOT_TOKEN", TG_TOKEN), ("TELEGRAM_CHAT_ID", TG_CHAT),
     ] if not v]
-    if USE_LLM and not GEMINI_KEY:
-        missing.append("GEMINI_API_KEY")
+    if USE_LLM and not GROQ_KEY:
+        missing.append("GROQ_API_KEY")
     if missing:
         print("환경변수(Secrets)가 비어있습니다:", ", ".join(missing))
         sys.exit(1)
