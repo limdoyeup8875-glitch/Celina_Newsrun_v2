@@ -193,12 +193,12 @@ def parse_pubdate(s):
     return dt.astimezone(KST)
 
 
-GROQ_MODEL = "llama-3.3-70b-versatile"   # 문체 지시(개조식/명사형)를 잘 따르는 대형 모델
-# 속도·한도가 더 필요하면 아래로(단 문체 준수는 약해짐):
-#   GROQ_MODEL = "llama-3.1-8b-instant"
+GROQ_MODEL = "llama-3.1-8b-instant"   # 분당 토큰 한도가 넉넉해 물량 많은 이 봇에 안전(하루 14,400회)
+# 문체 품질을 더 원하면 아래로(단 70B는 분당 토큰 6,000이라 첫 실행처럼 기사 많으면 429 잦음):
+#   GROQ_MODEL = "llama-3.3-70b-versatile"
 
 # 분당 한도(429) 방지를 위해 호출 사이 최소 간격을 둠
-LLM_MIN_INTERVAL = 15.0   # 초 (70B는 분당 토큰 한도가 낮아 넉넉히. 8B로 되돌리면 8.0 권장)
+LLM_MIN_INTERVAL = 8.0   # 초 (8B 기준. 70B로 올릴 땐 20초 이상 권장)
 _last_llm = [0.0]
 
 # 429가 계속 나면(=계정이 실제로 스로틀됨) 이번 실행은 요약을 포기하고
